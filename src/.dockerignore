@@ -1,0 +1,21 @@
+# General
+node_modules
+.npm
+.npmrc
+.git
+.gitignore
+.dockerignore
+Dockerfile
+README.md
+LICENSE
+.vscode
+*.log
+*.env.local
+*.env.development
+*.env.test
+
+# Project specific
+.next
+out
+dist
+.build
