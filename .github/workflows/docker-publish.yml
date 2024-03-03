@@ -34,7 +34,7 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v2
         with:
-          context: .
+          context: ./src
           file: ./Dockerfile
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/azure-chat:latest  # Replace with your GHCR path and image name
