@@ -1,0 +1,33 @@
+version: '3'
+services:
+  mongodb:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: example
+    volumes:
+      - mongodb-data:/data/db
+# startup:
+  #   image: curlimages/curl:latest
+  #   user: root
+  #   depends_on:
+  #     - cosmosdb
+  #   volumes:
+  #     - cert-data:/certs
+  #   command: >
+  #     /bin/sh -c "curl --retry 10 --retry-max-time 500  --retry-all-errors  -k https://cosmosdb:8081/_explorer/emulator.pem > /certs/emulatorcert.crt"
+  chat:
+    build: .
+ #   depends_on:
+ #     - startup
+    environment:
+      - MONGODB_CONNECTION_STRING=mongodb://root:example@mongodb:27017
+    env_file:
+      - .env.local
+    ports:
+      - "3000:3000"
+volumes:
+  mongodb-data:
+  cert-data:
