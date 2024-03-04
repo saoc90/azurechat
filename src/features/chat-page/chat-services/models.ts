@@ -1,3 +1,4 @@
+import { BSON } from "mongodb";
 import { ChatCompletionSnapshot } from "openai/lib/ChatCompletionStream";
 import { ChatCompletionMessage } from "openai/resources/chat/completions";
 
@@ -6,7 +7,7 @@ export const CHAT_THREAD_ATTRIBUTE = "CHAT_THREAD";
 export const MESSAGE_ATTRIBUTE = "CHAT_MESSAGE";
 export const CHAT_CITATION_ATTRIBUTE = "CHAT_CITATION";
 
-export interface ChatMessageModel {
+export interface ChatMessageModel extends BSON.Document{
   id: string;
   createdAt: Date;
   isDeleted: boolean;
@@ -21,7 +22,7 @@ export interface ChatMessageModel {
 
 export type ChatRole = "system" | "user" | "assistant" | "function" | "tool";
 
-export interface ChatThreadModel {
+export interface ChatThreadModel extends BSON.Document{
   id: string;
   name: string;
   createdAt: Date;
@@ -36,13 +37,13 @@ export interface ChatThreadModel {
   type: typeof CHAT_THREAD_ATTRIBUTE;
 }
 
-export interface UserPrompt {
+export interface UserPrompt extends BSON.Document{
   id: string; // thread id
   message: string;
   multimodalImage: string;
 }
 
-export interface ChatDocumentModel {
+export interface ChatDocumentModel extends BSON.Document {
   id: string;
   name: string;
   chatThreadId: string;

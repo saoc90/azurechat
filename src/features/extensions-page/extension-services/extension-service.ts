@@ -19,7 +19,6 @@ import { HistoryContainer } from "@/features/common/services/cosmos";
 import { AzureKeyVaultInstance } from "@/features/common/services/key-vault";
 import { uniqueId } from "@/features/common/util";
 import { AI_NAME, CHAT_DEFAULT_PERSONA } from "@/features/theme/theme-config";
-import { SqlQuerySpec } from "@azure/cosmos";
 import {
   EXTENSION_ATTRIBUTE,
   ExtensionModel,
@@ -32,113 +31,52 @@ export const FindExtensionByID = async (
   id: string
 ): Promise<ServerActionResponse<ExtensionModel>> => {
   try {
-    const querySpec: SqlQuerySpec = {
-      query: "SELECT * FROM root r WHERE r.type=@type AND r.id=@id",
-      parameters: [
-        {
-          name: "@type",
-          value: EXTENSION_ATTRIBUTE,
-        },
-        {
-          name: "@id",
-          value: id,
-        },
-      ],
-    };
+    const container = await HistoryContainer<ExtensionModel>();
+    const queryResult = await container.findOne({ id: id, type: EXTENSION_ATTRIBUTE });
 
-    const { resources } = await HistoryContainer()
-      .items.query<ExtensionModel>(querySpec)
-      .fetchAll();
-
-    if (resources.length === 0) {
+    if (!queryResult) {
       return {
         status: "NOT_FOUND",
-        errors: [
-          {
-            message: `Extension not found with id: ${id}`,
-          },
-        ],
+        errors: [{ message: `Extension not found with id: ${id}` }],
       };
     }
 
     return {
       status: "OK",
-      response: resources[0]!,
+      response: queryResult,
     };
   } catch (error) {
     return {
       status: "ERROR",
-      errors: [
-        {
-          message: `Error finding Extension: ${error}`,
-        },
-      ],
+      errors: [{ message: `Error finding Extension: ${error}` }],
     };
   }
 };
+
 
 export const CreateExtension = async (
   inputModel: ExtensionModel
 ): Promise<ServerActionResponse<ExtensionModel>> => {
   try {
-    const user = await getCurrentUser();
 
-    // ensure to reset the id's since they are generated on the client
-    inputModel.headers.map((h) => {
-      h.id = uniqueId();
-    });
+    const container = await HistoryContainer<ExtensionModel>();
+    const result = await container.insertOne(inputModel);
 
-    inputModel.functions.map((f) => {
-      f.id = uniqueId();
-    });
-
-    const modelToSave: ExtensionModel = {
-      id: uniqueId(),
-      name: inputModel.name,
-      executionSteps: inputModel.executionSteps,
-      description: inputModel.description,
-      isPublished: user.isAdmin ? inputModel.isPublished : false,
-      userId: await userHashedId(),
-      createdAt: new Date(),
-      type: "EXTENSION",
-      functions: inputModel.functions,
-      headers: inputModel.headers,
-    };
-
-    const validatedFields = validateSchema(modelToSave);
-
-    if (validatedFields.status === "OK") {
-      await secureHeaderValues(modelToSave);
-
-      const { resource } =
-        await HistoryContainer().items.create<ExtensionModel>(modelToSave);
-
-      if (resource) {
-        return {
-          status: "OK",
-          response: resource,
-        };
-      } else {
-        return {
-          status: "ERROR",
-          errors: [
-            {
-              message: `Error adding Extension: ${resource}`,
-            },
-          ],
-        };
-      }
+    if (result.insertedId) {
+      return {
+        status: "OK",
+        response: inputModel,
+      };
     } else {
-      return validatedFields;
+      return {
+        status: "ERROR",
+        errors: [{ message: "Error adding Extension" }],
+      };
     }
   } catch (error) {
     return {
       status: "ERROR",
-      errors: [
-        {
-          message: `Error adding Extension: ${error}`,
-        },
-      ],
+      errors: [{ message: `Error adding Extension: ${error}` }],
     };
   }
 };
@@ -231,14 +169,14 @@ export const DeleteExtension = async (
         await vault.beginDeleteSecret(h.id);
       });
 
-      const { resource } = await HistoryContainer()
-        .item(id, extensionResponse.response.userId)
-        .delete<ExtensionModel>();
+      const container = await HistoryContainer<ExtensionModel>();
+      const resource = await container.deleteOne({ id: id, userId: extensionResponse.response.userId });
+
 
       if (resource) {
         return {
           status: "OK",
-          response: resource,
+          response: {} as ExtensionModel,
         };
       } else {
         return {
@@ -299,20 +237,23 @@ export const UpdateExtension = async (
       if (validatedFields.status === "OK") {
         await secureHeaderValues(inputModel);
 
-        const { resource } =
-          await HistoryContainer().items.upsert<ExtensionModel>(inputModel);
+        const container = await HistoryContainer<ExtensionModel>();
+        const result = await container.replaceOne(
+          { id: inputModel.id, userId: inputModel.userId },
+          inputModel
+        );
 
-        if (resource) {
+        if (result.modifiedCount === 1) {
           return {
             status: "OK",
-            response: resource,
+            response: inputModel,
           };
         } else {
           return {
             status: "ERROR",
             errors: [
               {
-                message: `Error updating Extension: ${resource}`,
+                message: `Error updating Extension: ${inputModel}`,
               },
             ],
           };
@@ -339,32 +280,15 @@ export const FindAllExtensionForCurrentUser = async (): Promise<
   ServerActionResponse<Array<ExtensionModel>>
 > => {
   try {
-    const querySpec: SqlQuerySpec = {
-      query:
-        "SELECT * FROM root r WHERE r.type=@type AND (r.isPublished=@isPublished OR r.userId=@userId) ORDER BY r.createdAt DESC",
-      parameters: [
-        {
-          name: "@type",
-          value: EXTENSION_ATTRIBUTE,
-        },
-        {
-          name: "@isPublished",
-          value: true,
-        },
-        {
-          name: "@userId",
-          value: await userHashedId(),
-        },
-      ],
-    };
-
-    const { resources } = await HistoryContainer()
-      .items.query<ExtensionModel>(querySpec)
-      .fetchAll();
+    const userId = await userHashedId();
+    const container = await HistoryContainer<ExtensionModel>();
+    const queryResult = await container.find(
+      { type: EXTENSION_ATTRIBUTE, $or: [{ isPublished: true }, { userId: userId }] }
+    ).sort({ createdAt: -1 }).toArray();
 
     return {
       status: "OK",
-      response: resources,
+      response: queryResult
     };
   } catch (error) {
     return {
@@ -390,7 +314,7 @@ export const CreateChatWithExtension = async (
       name: extension.name,
       useName: (await userSession())!.name,
       userId: await userHashedId(),
-      id: "",
+      id: uniqueId(),
       createdAt: new Date(),
       lastMessageAt: new Date(),
       bookmarked: false,

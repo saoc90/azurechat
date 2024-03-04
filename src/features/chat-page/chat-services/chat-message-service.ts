@@ -13,50 +13,21 @@ export const FindTopChatMessagesForCurrentUser = async (
   top: number = 30
 ): Promise<ServerActionResponse<Array<ChatMessageModel>>> => {
   try {
-    const querySpec: SqlQuerySpec = {
-      query:
-        "SELECT TOP @top * FROM root r WHERE r.type=@type AND r.threadId = @threadId AND r.userId=@userId AND r.isDeleted=@isDeleted ORDER BY r.createdAt DESC",
-      parameters: [
-        {
-          name: "@type",
-          value: MESSAGE_ATTRIBUTE,
-        },
-        {
-          name: "@threadId",
-          value: chatThreadID,
-        },
-        {
-          name: "@userId",
-          value: await userHashedId(),
-        },
-        {
-          name: "@isDeleted",
-          value: false,
-        },
-        {
-          name: "@top",
-          value: top,
-        },
-      ],
-    };
+    const userId = await userHashedId();
+    const container = await HistoryContainer<ChatMessageModel>();
+    const resources = await container.find(
+      {
+        type: MESSAGE_ATTRIBUTE,
+        threadId: chatThreadID,
+        userId,
+        isDeleted: false,
+      },
+      { sort: { createdAt: -1 }, limit: top }
+    ).toArray();
 
-    const { resources } = await HistoryContainer()
-      .items.query<ChatMessageModel>(querySpec)
-      .fetchAll();
-
-    return {
-      status: "OK",
-      response: resources,
-    };
+    return { status: "OK", response: resources };
   } catch (e) {
-    return {
-      status: "ERROR",
-      errors: [
-        {
-          message: `${e}`,
-        },
-      ],
-    };
+    return { status: "ERROR", errors: [{ message: `${e}` }] };
   }
 };
 
@@ -64,46 +35,21 @@ export const FindAllChatMessagesForCurrentUser = async (
   chatThreadID: string
 ): Promise<ServerActionResponse<Array<ChatMessageModel>>> => {
   try {
-    const querySpec: SqlQuerySpec = {
-      query:
-        "SELECT * FROM root r WHERE r.type=@type AND r.threadId = @threadId AND r.userId=@userId AND  r.isDeleted=@isDeleted ORDER BY r.createdAt ASC",
-      parameters: [
-        {
-          name: "@type",
-          value: MESSAGE_ATTRIBUTE,
-        },
-        {
-          name: "@threadId",
-          value: chatThreadID,
-        },
-        {
-          name: "@userId",
-          value: await userHashedId(),
-        },
-        {
-          name: "@isDeleted",
-          value: false,
-        },
-      ],
-    };
+    const userId = await userHashedId();
+    const container = await HistoryContainer<ChatMessageModel>();
+    const resources = await container.find(
+      {
+        type: MESSAGE_ATTRIBUTE,
+        threadId: chatThreadID,
+        userId,
+        isDeleted: false,
+      },
+      { sort: { createdAt: 1 } }
+    ).toArray();
 
-    const { resources } = await HistoryContainer()
-      .items.query<ChatMessageModel>(querySpec)
-      .fetchAll();
-
-    return {
-      status: "OK",
-      response: resources,
-    };
+    return { status: "OK", response: resources };
   } catch (e) {
-    return {
-      status: "ERROR",
-      errors: [
-        {
-          message: `${e}`,
-        },
-      ],
-    };
+    return { status: "ERROR", errors: [{ message: `${e}` }] };
   }
 };
 
@@ -140,7 +86,7 @@ export const UpsertChatMessage = async (
   chatModel: ChatMessageModel
 ): Promise<ServerActionResponse<ChatMessageModel>> => {
   try {
-    const modelToSave: ChatMessageModel = {
+    const modelToSave = {
       ...chatModel,
       id: uniqueId(),
       createdAt: new Date(),
@@ -148,32 +94,21 @@ export const UpsertChatMessage = async (
       isDeleted: false,
     };
 
-    const { resource } =
-      await HistoryContainer().items.upsert<ChatMessageModel>(modelToSave);
+    const container = await HistoryContainer<ChatMessageModel>();
+    // In MongoDB, to upsert, you use find one and update with upsert flag set to true
+    const resource = await container.findOneAndUpdate(
+      { id: modelToSave.id },
+      { $set: { ...modelToSave, type: "CHAT_MESSAGE" } },
+      { upsert: true, returnDocument: 'after' }
+    );
 
     if (resource) {
-      return {
-        status: "OK",
-        response: resource,
-      };
+      return { status: "OK", response: resource };
     }
 
-    return {
-      status: "ERROR",
-      errors: [
-        {
-          message: `Chat message not found`,
-        },
-      ],
-    };
+    return { status: "ERROR", errors: [{ message: `Chat message not found` }] };
   } catch (e) {
-    return {
-      status: "ERROR",
-      errors: [
-        {
-          message: `${e}`,
-        },
-      ],
-    };
+    return { status: "ERROR", errors: [{ message: `${e}` }] };
   }
 };
+

@@ -13,7 +13,6 @@ import {
 } from "@/features/common/server-action-response";
 import { HistoryContainer } from "@/features/common/services/cosmos";
 import { uniqueId } from "@/features/common/util";
-import { SqlQuerySpec } from "@azure/cosmos";
 import { PERSONA_ATTRIBUTE, PersonaModel, PersonaModelSchema } from "./models";
 
 interface PersonaInput {
@@ -27,25 +26,10 @@ export const FindPersonaByID = async (
   id: string
 ): Promise<ServerActionResponse<PersonaModel>> => {
   try {
-    const querySpec: SqlQuerySpec = {
-      query: "SELECT * FROM root r WHERE r.type=@type AND r.id=@id",
-      parameters: [
-        {
-          name: "@type",
-          value: PERSONA_ATTRIBUTE,
-        },
-        {
-          name: "@id",
-          value: id,
-        },
-      ],
-    };
+    const container = await HistoryContainer<PersonaModel>(); // Assumes HistoryContainer returns a MongoDB collection
+    const persona = await container.findOne({ id: id, type: PERSONA_ATTRIBUTE });
 
-    const { resources } = await HistoryContainer()
-      .items.query<PersonaModel>(querySpec)
-      .fetchAll();
-
-    if (resources.length === 0) {
+    if (!persona) {
       return {
         status: "NOT_FOUND",
         errors: [
@@ -58,7 +42,7 @@ export const FindPersonaByID = async (
 
     return {
       status: "OK",
-      response: resources[0],
+      response: persona,
     };
   } catch (error) {
     return {
@@ -95,14 +79,14 @@ export const CreatePersona = async (
       return valid;
     }
 
-    const { resource } = await HistoryContainer().items.create<PersonaModel>(
-      modelToSave
-    );
+    const container = await HistoryContainer<PersonaModel>();
 
-    if (resource) {
+    const resource = await container.insertOne(modelToSave);
+
+    if (resource.acknowledged) {
       return {
         status: "OK",
-        response: resource,
+        response: modelToSave,
       };
     } else {
       return {
@@ -156,13 +140,26 @@ export const DeletePersona = async (
     const personaResponse = await EnsurePersonaOperation(personaId);
 
     if (personaResponse.status === "OK") {
-      const { resource: deletedPersona } = await HistoryContainer()
-        .item(personaId, personaResponse.response.userId)
-        .delete();
+      const container = await HistoryContainer<PersonaModel>()
+
+      const persona = await container.findOne({ id: personaId });
+
+      if (!persona) {
+        return {
+          status: "NOT_FOUND",
+          errors: [
+            {
+              message: "Persona not found",
+            },
+          ],
+        };
+      }
+      
+      await container.deleteOne({ id: personaId });
 
       return {
         status: "OK",
-        response: deletedPersona,
+        response: persona,
       };
     }
 
@@ -205,14 +202,15 @@ export const UpsertPersona = async (
         return validationResponse;
       }
 
-      const { resource } = await HistoryContainer().items.upsert<PersonaModel>(
-        modelToUpdate
-      );
+      const container = await HistoryContainer<PersonaModel>();
 
-      if (resource) {
+      const resource = await container.replaceOne({ id: modelToUpdate.id }, modelToUpdate);
+
+
+      if (resource.acknowledged) {
         return {
           status: "OK",
-          response: resource,
+          response: modelToUpdate,
         };
       }
 
@@ -243,28 +241,10 @@ export const FindAllPersonaForCurrentUser = async (): Promise<
   ServerActionResponse<Array<PersonaModel>>
 > => {
   try {
-    const querySpec: SqlQuerySpec = {
-      query:
-        "SELECT * FROM root r WHERE r.type=@type AND (r.isPublished=@isPublished OR r.userId=@userId) ORDER BY r.createdAt DESC",
-      parameters: [
-        {
-          name: "@type",
-          value: PERSONA_ATTRIBUTE,
-        },
-        {
-          name: "@isPublished",
-          value: true,
-        },
-        {
-          name: "@userId",
-          value: await userHashedId(),
-        },
-      ],
-    };
+    
+    const container = await HistoryContainer<PersonaModel>();
 
-    const { resources } = await HistoryContainer()
-      .items.query<PersonaModel>(querySpec)
-      .fetchAll();
+    const resources = await container.find({$or: [ {userId: await userHashedId(), type: "PERSONA"}, {isPublished: true, type: "PERSONA" }]}).toArray();
 
     return {
       status: "OK",
@@ -295,7 +275,7 @@ export const CreatePersonaChat = async (
       name: persona.name,
       useName: user.name,
       userId: await userHashedId(),
-      id: "",
+      id: uniqueId(),
       createdAt: new Date(),
       lastMessageAt: new Date(),
       bookmarked: false,

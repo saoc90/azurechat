@@ -8,7 +8,6 @@ import { RevalidateCache } from "@/features/common/navigation-helpers";
 import { ServerActionResponse } from "@/features/common/server-action-response";
 import { DocumentIntelligenceInstance } from "@/features/common/services/document-intelligence";
 import { uniqueId } from "@/features/common/util";
-import { SqlQuerySpec } from "@azure/cosmos";
 import { EnsureIndexIsCreated } from "./azure-ai-search/azure-ai-search";
 import { CHAT_DOCUMENT_ATTRIBUTE, ChatDocumentModel } from "./models";
 
@@ -110,33 +109,15 @@ export const FindAllChatDocuments = async (
   chatThreadID: string
 ): Promise<ServerActionResponse<ChatDocumentModel[]>> => {
   try {
-    const querySpec: SqlQuerySpec = {
-      query:
-        "SELECT * FROM root r WHERE r.type=@type AND r.chatThreadId = @threadId AND r.isDeleted=@isDeleted",
-      parameters: [
-        {
-          name: "@type",
-          value: CHAT_DOCUMENT_ATTRIBUTE,
-        },
-        {
-          name: "@threadId",
-          value: chatThreadID,
-        },
-        {
-          name: "@isDeleted",
-          value: false,
-        },
-      ],
-    };
+    
+    const documents = await (await HistoryContainer<ChatDocumentModel>())
+      .find({ chatThreadId: chatThreadID, isDeleted: false })
+      .toArray();
 
-    const { resources } = await HistoryContainer()
-      .items.query<ChatDocumentModel>(querySpec)
-      .fetchAll();
-
-    if (resources) {
+    if (documents) {
       return {
         status: "OK",
-        response: resources,
+        response: documents,
       };
     } else {
       return {
@@ -175,12 +156,19 @@ export const CreateChatDocument = async (
       name: fileName,
     };
 
-    const { resource } =
-      await HistoryContainer().items.upsert<ChatDocumentModel>(modelToSave);
-    RevalidateCache({
-      page: "chat",
-      params: chatThreadID,
-    });
+    const filter = { chatThreadId: chatThreadID, name: fileName };
+    const update = { $set: modelToSave };
+
+    const resource = await (await HistoryContainer<ChatDocumentModel>()).findOneAndUpdate(
+      filter,
+      update,
+      {
+        upsert: true,
+        returnDocument: "after",
+      }
+    );
+
+    RevalidateCache({ page: "chat", params: chatThreadID, });
 
     if (resource) {
       return {

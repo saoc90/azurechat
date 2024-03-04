@@ -2,7 +2,6 @@ import { userHashedId } from "@/features/auth-page/helpers";
 import { ServerActionResponse } from "@/features/common/server-action-response";
 import { HistoryContainer } from "@/features/common/services/cosmos";
 import { uniqueId } from "@/features/common/util";
-import { SqlQuerySpec } from "@azure/cosmos";
 import { DocumentSearchResponse } from "./azure-ai-search/azure-ai-search";
 import { CHAT_CITATION_ATTRIBUTE, ChatCitationModel } from "./models";
 
@@ -10,8 +9,9 @@ export const CreateCitation = async (
   model: ChatCitationModel
 ): Promise<ServerActionResponse<ChatCitationModel>> => {
   try {
-    const { resource } =
-      await HistoryContainer().items.create<ChatCitationModel>(model);
+    const container = await HistoryContainer<ChatCitationModel>();
+
+    const resource = await container.insertOne(model);
 
     if (!resource) {
       return {
@@ -22,7 +22,7 @@ export const CreateCitation = async (
 
     return {
       status: "OK",
-      response: resource,
+      response: model,
     };
   } catch (error) {
     return {
@@ -58,28 +58,10 @@ export const FindCitationByID = async (
   id: string
 ): Promise<ServerActionResponse<ChatCitationModel>> => {
   try {
-    const querySpec: SqlQuerySpec = {
-      query:
-        "SELECT * FROM root r WHERE r.type=@type AND r.id=@id AND r.userId=@userId ",
-      parameters: [
-        {
-          name: "@type",
-          value: CHAT_CITATION_ATTRIBUTE,
-        },
-        {
-          name: "@id",
-          value: id,
-        },
-        {
-          name: "@userId",
-          value: await userHashedId(),
-        },
-      ],
-    };
 
-    const { resources } = await HistoryContainer()
-      .items.query<ChatCitationModel>(querySpec)
-      .fetchAll();
+    const container = await HistoryContainer<ChatCitationModel>();
+
+    const resources = await container.find({ id: id, type: "CHAT_CITATION", userId: await userHashedId() }).toArray();
 
     if (resources.length === 0) {
       return {

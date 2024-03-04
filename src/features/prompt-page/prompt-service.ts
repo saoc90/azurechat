@@ -9,7 +9,6 @@ import {
   PromptModel,
   PromptModelSchema,
 } from "@/features/prompt-page/models";
-import { SqlQuerySpec } from "@azure/cosmos";
 import { getCurrentUser, userHashedId } from "../auth-page/helpers";
 import { ConfigContainer } from "../common/services/cosmos";
 import { uniqueId } from "../common/util";
@@ -47,14 +46,14 @@ export const CreatePrompt = async (
       return valid;
     }
 
-    const { resource } = await ConfigContainer().items.create<PromptModel>(
-      modelToSave
-    );
+    const container = await ConfigContainer<PromptModel>();
 
-    if (resource) {
+    const resource = await container.insertOne(modelToSave);
+
+    if (resource.acknowledged) {
       return {
         status: "OK",
-        response: resource,
+        response: modelToSave,
       };
     } else {
       return {
@@ -82,19 +81,10 @@ export const FindAllPrompts = async (): Promise<
   ServerActionResponse<Array<PromptModel>>
 > => {
   try {
-    const querySpec: SqlQuerySpec = {
-      query: "SELECT * FROM root r WHERE r.type=@type",
-      parameters: [
-        {
-          name: "@type",
-          value: PROMPT_ATTRIBUTE,
-        },
-      ],
-    };
+    
+    const container = await ConfigContainer<PromptModel>();
 
-    const { resources } = await ConfigContainer()
-      .items.query<PromptModel>(querySpec)
-      .fetchAll();
+    const resources = await container.find({type: PROMPT_ATTRIBUTE }).toArray();
 
     return {
       status: "OK",
@@ -141,13 +131,17 @@ export const DeletePrompt = async (
     const promptResponse = await EnsurePromptOperation(promptId);
 
     if (promptResponse.status === "OK") {
-      const { resource: deletedPrompt } = await ConfigContainer()
-        .item(promptId, promptResponse.response.userId)
-        .delete();
+
+      const container = await ConfigContainer<PromptModel>();
+
+      const prompt = await container.findOne({ id: promptId });
+
+      await container.deleteOne({ id: promptId, userId: promptResponse.response.userId})
+
 
       return {
         status: "OK",
-        response: deletedPrompt,
+        response: prompt!!,
       };
     }
 
@@ -168,23 +162,9 @@ export const FindPromptByID = async (
   id: string
 ): Promise<ServerActionResponse<PromptModel>> => {
   try {
-    const querySpec: SqlQuerySpec = {
-      query: "SELECT * FROM root r WHERE r.type=@type AND r.id=@id",
-      parameters: [
-        {
-          name: "@type",
-          value: PROMPT_ATTRIBUTE,
-        },
-        {
-          name: "@id",
-          value: id,
-        },
-      ],
-    };
+    const configContainer = await ConfigContainer<PromptModel>();
 
-    const { resources } = await ConfigContainer()
-      .items.query<PromptModel>(querySpec)
-      .fetchAll();
+    const resources = await configContainer.find({ id: id, type: PROMPT_ATTRIBUTE}).toArray();
 
     if (resources.length === 0) {
       return {
@@ -238,8 +218,12 @@ export const UpsertPrompt = async (
         return validationResponse;
       }
 
-      const { resource } = await ConfigContainer().items.upsert<PromptModel>(
-        modelToUpdate
+      const container = await ConfigContainer<PromptModel>();
+
+      const resource = await container.findOneAndUpdate(
+        { id: modelToUpdate.id },
+        { $set: modelToUpdate },
+        { upsert: true, returnDocument: "after" }
       );
 
       if (resource) {

@@ -1,4 +1,5 @@
 import { CosmosClient } from "@azure/cosmos";
+import { BSON, MongoClient } from "mongodb";
 
 // Read Cosmos DB_NAME and CONTAINER_NAME from .env
 const DB_NAME = process.env.AZURE_COSMOSDB_DB_NAME || "chat";
@@ -19,16 +20,29 @@ export const CosmosInstance = () => {
   return new CosmosClient({ endpoint, key });
 };
 
-export const ConfigContainer = () => {
-  const client = CosmosInstance();
-  const database = client.database(DB_NAME);
-  const container = database.container(CONFIG_CONTAINER_NAME);
+export const MongoDbInstance = async () => {
+  const connectionString = process.env.MONGODB_CONNECTION_STRING;
+  if (!connectionString) {
+    throw new Error(
+      "MongoDB is not configured. Please configure it in the .env file."
+    );
+  }
+  const client = new MongoClient(connectionString);
+  await client.connect();
+  return client;
+};
+
+
+export const ConfigContainer = async <T extends BSON.Document>() => {
+  const client = MongoDbInstance();
+  const database = (await client).db(DB_NAME);
+  const container = database.collection<T>(CONFIG_CONTAINER_NAME);
   return container;
 };
 
-export const HistoryContainer = () => {
-  const client = CosmosInstance();
-  const database = client.database(DB_NAME);
-  const container = database.container(CONTAINER_NAME);
+export const HistoryContainer = async <T extends BSON.Document>() => {
+  const client = await MongoDbInstance();
+  const database = client.db(DB_NAME);
+  const container = database.collection<T>(CONTAINER_NAME);
   return container;
 };

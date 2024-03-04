@@ -1,11 +1,12 @@
 import { refineFromEmpty } from "@/features/common/schema-validation";
+import { BSON } from "mongodb";
 import { z } from "zod";
 
 export const EXTENSION_ATTRIBUTE = "EXTENSION";
 
-export type ExtensionModel = z.infer<typeof ExtensionModelSchema>;
-export type ExtensionFunctionModel = z.infer<typeof ExtensionFunctionSchema>;
-export type HeaderModel = z.infer<typeof HeaderSchema>;
+export type ExtensionModel = z.infer<typeof ExtensionModelSchema> & BSON.Document;
+export type ExtensionFunctionModel = z.infer<typeof ExtensionFunctionSchema> & BSON.Document;
+export type HeaderModel = z.infer<typeof HeaderSchema> & BSON.Document;
 
 export const HeaderSchema = z.object({
   id: z.string(),

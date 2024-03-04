@@ -13,45 +13,29 @@ import {
   CHAT_DEFAULT_PERSONA,
   NEW_CHAT_NAME,
 } from "@/features/theme/theme-config";
-import { SqlQuerySpec } from "@azure/cosmos";
 import { HistoryContainer } from "../../common/services/cosmos";
 import { DeleteDocuments } from "./azure-ai-search/azure-ai-search";
 import { FindAllChatDocuments } from "./chat-document-service";
 import { FindAllChatMessagesForCurrentUser } from "./chat-message-service";
 import {
   CHAT_THREAD_ATTRIBUTE,
-  ChatDocumentModel,
   ChatThreadModel,
 } from "./models";
+import { Filter } from "mongodb";
 
 export const FindAllChatThreadForCurrentUser = async (): Promise<
   ServerActionResponse<Array<ChatThreadModel>>
 > => {
   try {
-    const querySpec: SqlQuerySpec = {
-      query:
-        "SELECT * FROM root r WHERE r.type=@type AND r.userId=@userId AND r.isDeleted=@isDeleted ORDER BY r.createdAt DESC",
-      parameters: [
-        {
-          name: "@type",
-          value: CHAT_THREAD_ATTRIBUTE,
-        },
-        {
-          name: "@userId",
-          value: await userHashedId(),
-        },
-        {
-          name: "@isDeleted",
-          value: false,
-        },
-      ],
+    const userId = await userHashedId();
+    const container = await HistoryContainer<ChatThreadModel>();
+    const query: Filter<ChatThreadModel> = {
+      type: "CHAT_THREAD",
+      userId: userId,
+      isDeleted: false,
     };
+    const resources = await container.find(query).sort({ createdAt: -1 }).toArray();
 
-    const { resources } = await HistoryContainer()
-      .items.query<ChatThreadModel>(querySpec, {
-        partitionKey: await userHashedId(),
-      })
-      .fetchAll();
     return {
       status: "OK",
       response: resources,
@@ -68,32 +52,15 @@ export const FindChatThreadForCurrentUser = async (
   id: string
 ): Promise<ServerActionResponse<ChatThreadModel>> => {
   try {
-    const querySpec: SqlQuerySpec = {
-      query:
-        "SELECT * FROM root r WHERE r.type=@type AND r.userId=@userId AND r.id=@id AND r.isDeleted=@isDeleted",
-      parameters: [
-        {
-          name: "@type",
-          value: CHAT_THREAD_ATTRIBUTE,
-        },
-        {
-          name: "@userId",
-          value: await userHashedId(),
-        },
-        {
-          name: "@id",
-          value: id,
-        },
-        {
-          name: "@isDeleted",
-          value: false,
-        },
-      ],
+    const userId = await userHashedId();
+    const container = await HistoryContainer<ChatThreadModel>();
+    const query: Filter<ChatThreadModel> = {
+      type: CHAT_THREAD_ATTRIBUTE,
+      userId: userId,
+      id: id,
+      isDeleted: false,
     };
-
-    const { resources } = await HistoryContainer()
-      .items.query<ChatThreadModel>(querySpec)
-      .fetchAll();
+    const resources = await container.find(query).toArray();
 
     if (resources.length === 0) {
       return {
@@ -121,22 +88,21 @@ export const SoftDeleteChatThreadForCurrentUser = async (
     const chatThreadResponse = await FindChatThreadForCurrentUser(chatThreadID);
 
     if (chatThreadResponse.status === "OK") {
-      const chatResponse = await FindAllChatMessagesForCurrentUser(
-        chatThreadID
-      );
+      const chatResponse = await FindAllChatMessagesForCurrentUser(chatThreadID);
 
       if (chatResponse.status !== "OK") {
         return chatResponse;
       }
       const chats = chatResponse.response;
+      const container = await HistoryContainer<ChatThreadModel>();
 
-      chats.forEach(async (chat) => {
-        const itemToUpdate = {
-          ...chat,
-        };
-        itemToUpdate.isDeleted = true;
-        await HistoryContainer().items.upsert(itemToUpdate);
-      });
+      // Mark all messages in the thread as deleted
+      for (const chat of chats) {
+        await container.updateOne(
+          { id: chat.id },
+          { $set: { isDeleted: true } }
+        );
+      }
 
       const chatDocumentsResponse = await FindAllChatDocuments(chatThreadID);
 
@@ -146,22 +112,31 @@ export const SoftDeleteChatThreadForCurrentUser = async (
 
       const chatDocuments = chatDocumentsResponse.response;
 
+      // Perform additional operations if necessary before marking the documents as deleted
       if (chatDocuments.length !== 0) {
-        await DeleteDocuments(chatThreadID);
+        await DeleteDocuments(chatThreadID); // Make sure DeleteDocuments is implemented for MongoDB
       }
 
-      chatDocuments.forEach(async (chatDocument: ChatDocumentModel) => {
-        const itemToUpdate = {
-          ...chatDocument,
-        };
-        itemToUpdate.isDeleted = true;
-        await HistoryContainer().items.upsert(itemToUpdate);
-      });
+      // Mark all documents in the thread as deleted
+      for (const chatDocument of chatDocuments) {
+        await container.updateOne(
+          { id: chatDocument.id },
+          { $set: { isDeleted: true } }
+        );
+      }
 
+      // Mark the chat thread as deleted
+      await container.updateOne(
+        { id: chatThreadResponse.response.id },
+        { $set: { isDeleted: true } }
+      );
+
+      // Return the chat thread marked as deleted
       chatThreadResponse.response.isDeleted = true;
-      await HistoryContainer().items.upsert(chatThreadResponse.response);
+      return chatThreadResponse;
     }
 
+    // Return the original response if the chatThread was not found
     return chatThreadResponse;
   } catch (error) {
     return {
@@ -241,29 +216,41 @@ export const UpsertChatThread = async (
   chatThread: ChatThreadModel
 ): Promise<ServerActionResponse<ChatThreadModel>> => {
   try {
+    const container = await HistoryContainer<ChatThreadModel>();
+    let upsertedChatThread;
+
     if (chatThread.id) {
-      const response = await EnsureChatThreadOperation(chatThread.id);
-      if (response.status !== "OK") {
-        return response;
+      // If the _id is specified, we are updating an existing document.
+      const result = await container.updateOne(
+        { id: chatThread.id },
+        { $set: chatThread },
+        { upsert: true } // This option creates a new document if no document matches the filter.
+      );
+      
+      // If the modification count is 0 and upsertedId is null, it means the document was not found.
+      if (result.modifiedCount === 0 && !result.upsertedId) {
+        throw new Error('No document was updated, and no new document was upserted.');
       }
+      
+      if (result.upsertedId) {
+        // If an upsert happened, return the _id of the upserted document.
+        upsertedChatThread = { ...chatThread, _id: result.upsertedId };
+      } else {
+        // Otherwise, return the updated chat thread as is.
+        upsertedChatThread = chatThread;
+      }
+    } else {
+      // If no _id is provided, we are creating a new document.
+      const result = await container.insertOne(chatThread);
+      upsertedChatThread = { ...chatThread, _id: result.insertedId };
     }
-
-    chatThread.lastMessageAt = new Date();
-    const { resource } = await HistoryContainer().items.upsert<ChatThreadModel>(
-      chatThread
-    );
-
-    if (resource) {
-      return {
-        status: "OK",
-        response: resource,
-      };
-    }
-
+    
+    // Return the upserted/updated chat thread object
     return {
-      status: "ERROR",
-      errors: [{ message: `Chat thread not found` }],
+      status: "OK",
+      response: upsertedChatThread,
     };
+
   } catch (error) {
     return {
       status: "ERROR",
@@ -276,6 +263,12 @@ export const CreateChatThread = async (): Promise<
   ServerActionResponse<ChatThreadModel>
 > => {
   try {
+    const hashedUserId = await userHashedId();
+    const userSessionData = await userSession();
+    if (!userSessionData) {
+      throw new Error('User session not found');
+    }
+    
     const modelToSave: ChatThreadModel = {
       name: NEW_CHAT_NAME,
       useName: (await userSession())!.name,
@@ -291,20 +284,22 @@ export const CreateChatThread = async (): Promise<
       extension: [],
     };
 
-    const { resource } = await HistoryContainer().items.create<ChatThreadModel>(
-      modelToSave
-    );
-    if (resource) {
+    // Get the MongoDB collection object from HistoryContainer
+    const container = await HistoryContainer<ChatThreadModel>();
+    
+    // Insert the new chat thread into the collection
+    const result = await container.insertOne(modelToSave);
+
+    // Check if the insert was successful based on the result
+    if (result.insertedId) {
+      // Send back the response with status OK and the newly created chat thread
       return {
         status: "OK",
-        response: resource,
+        response: modelToSave 
       };
+    } else {
+      throw new Error('Failed to create a new chat thread');
     }
-
-    return {
-      status: "ERROR",
-      errors: [{ message: `Chat thread not found` }],
-    };
   } catch (error) {
     return {
       status: "ERROR",

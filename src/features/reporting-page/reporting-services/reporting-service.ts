@@ -8,6 +8,7 @@ import {
 import { ServerActionResponse } from "@/features/common/server-action-response";
 import { HistoryContainer } from "@/features/common/services/cosmos";
 import { SqlQuerySpec } from "@azure/cosmos";
+import { off } from "process";
 
 export const FindAllChatThreadsForAdmin = async (
   limit: number,
@@ -23,28 +24,8 @@ export const FindAllChatThreadsForAdmin = async (
   }
 
   try {
-    const querySpec: SqlQuerySpec = {
-      query:
-        "SELECT * FROM root r WHERE r.type=@type ORDER BY r.createdAt DESC OFFSET @offset LIMIT @limit",
-      parameters: [
-        {
-          name: "@type",
-          value: CHAT_THREAD_ATTRIBUTE,
-        },
-        {
-          name: "@offset",
-          value: offset,
-        },
-        {
-          name: "@limit",
-          value: limit,
-        },
-      ],
-    };
-
-    const { resources } = await HistoryContainer()
-      .items.query<ChatThreadModel>(querySpec)
-      .fetchAll();
+    const container = await HistoryContainer<ChatThreadModel>();
+    const resources = await container.find({ type: CHAT_THREAD_ATTRIBUTE}).sort({createdAt: -1}).skip(offset).limit(limit).toArray();
     return {
       status: "OK",
       response: resources,
@@ -70,24 +51,9 @@ export const FindAllChatMessagesForAdmin = async (
   }
 
   try {
-    const querySpec: SqlQuerySpec = {
-      query:
-        "SELECT * FROM root r WHERE r.type=@type AND r.threadId = @threadId ORDER BY r.createdAt ASC",
-      parameters: [
-        {
-          name: "@type",
-          value: MESSAGE_ATTRIBUTE,
-        },
-        {
-          name: "@threadId",
-          value: chatThreadID,
-        },
-      ],
-    };
+    const container = await HistoryContainer<ChatMessageModel>();
 
-    const { resources } = await HistoryContainer()
-      .items.query<ChatMessageModel>(querySpec)
-      .fetchAll();
+    const resources = await container.find({ type: MESSAGE_ATTRIBUTE, threadId: chatThreadID }).toArray();
 
     return {
       status: "OK",
